@@ -2,6 +2,7 @@
 import React, { useState, useRef } from "react";
 import Image from "next/image";
 import JSZip from "jszip";
+import { jsPDF } from "jspdf";
 
 type ResizedImage = {
   dataUrl: string;
@@ -17,6 +18,7 @@ const App = () => {
   const [resizeMode, setResizeMode] = useState<"dimensions" | "fileSize">(
     "dimensions"
   ); // 'dimensions' or 'fileSize'
+  const [convertToPdf, setConvertToPdf] = useState<boolean>(false); // New state for PDF conversion
 
   const [resizedImages, setResizedImages] = useState<ResizedImage[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -267,6 +269,28 @@ const App = () => {
             .join(".")}.jpeg`;
         }
 
+        // PDF Conversion Logic
+        if (convertToPdf) {
+          const doc = new jsPDF();
+          const imgProps = doc.getImageProperties(resizedDataUrl);
+          const pdfWidth = doc.internal.pageSize.getWidth();
+          const pdfHeight = doc.internal.pageSize.getHeight();
+
+          const ratio = Math.min(
+            pdfWidth / imgProps.width,
+            pdfHeight / imgProps.height
+          );
+          const imgWidth = imgProps.width * ratio;
+          const imgHeight = imgProps.height * ratio;
+
+          const x = (pdfWidth - imgWidth) / 2;
+          const y = (pdfHeight - imgHeight) / 2;
+
+          doc.addImage(resizedDataUrl, "JPEG", x, y, imgWidth, imgHeight); // Use JPEG for PDF to match file size resizing output
+          resizedDataUrl = doc.output("datauristring");
+          outputFileName = `${file.name.split(".").slice(0, -1).join(".")}.pdf`; // Change extension to .pdf
+        }
+
         newResizedImages.push({
           dataUrl: resizedDataUrl,
           name: outputFileName,
@@ -332,7 +356,7 @@ const App = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center p-4 font-sans">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-2xl transform transition-all duration-300 hover:scale-[1.01]">
         <h1 className="text-4xl font-extrabold text-center text-gray-800 mb-8 tracking-tight">
-          Image Resizer
+          Image Resizer & PDF Converter
         </h1>
 
         {/* Resize Mode Selection */}
@@ -361,6 +385,21 @@ const App = () => {
             />
             <span className="ml-2 text-lg font-semibold text-gray-700">
               Resize by File Size (KB)
+            </span>
+          </label>
+        </div>
+
+        {/* New: Convert to PDF Option */}
+        <div className="mb-6 flex justify-center">
+          <label className="inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              className="form-checkbox h-5 w-5 text-purple-600"
+              checked={convertToPdf}
+              onChange={(e) => setConvertToPdf(e.target.checked)}
+            />
+            <span className="ml-2 text-lg font-semibold text-gray-700">
+              Convert each image to PDF
             </span>
           </label>
         </div>
@@ -486,7 +525,7 @@ const App = () => {
                 : "bg-blue-600 hover:bg-blue-700 hover:shadow-lg active:bg-blue-800"
             }`}
         >
-          {loading ? "Resizing..." : "Convert Images"}
+          {loading ? "Processing..." : "Process Images"}
         </button>
 
         {message && (
@@ -504,7 +543,7 @@ const App = () => {
         {resizedImages.length > 0 && (
           <div className="mt-10 border-t pt-8 border-gray-200">
             <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
-              Resized Images
+              Processed Images
             </h2>
             {/* Download All Button */}
             <div className="mb-6 text-center">
@@ -527,14 +566,21 @@ const App = () => {
                   key={index}
                   className="bg-gray-50 p-4 rounded-xl shadow-sm flex flex-col items-center justify-between"
                 >
-                  <Image
-                    src={image.dataUrl}
-                    alt={image.name}
-                    width={150}
-                    height={150}
-                    unoptimized
-                    className="max-w-full h-auto rounded-lg mb-4 border border-gray-200"
-                  />
+                  {/* Display image only if it's not a PDF, or you can add a PDF icon */}
+                  {!image.name.endsWith(".pdf") ? (
+                    <Image
+                      src={image.dataUrl}
+                      alt={image.name}
+                      width={150}
+                      height={150}
+                      unoptimized
+                      className="max-w-full h-auto rounded-lg mb-4 border border-gray-200"
+                    />
+                  ) : (
+                    <div className="w-[150px] h-[150px] flex items-center justify-center bg-red-100 rounded-lg mb-4 border border-gray-200">
+                      <p className="text-red-600 font-bold text-5xl">📄</p>
+                    </div>
+                  )}
                   <p className="text-sm font-medium text-gray-700 text-center mb-3 break-words">
                     {image.name}
                   </p>
