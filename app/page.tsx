@@ -1,6 +1,7 @@
 "use client";
 import React, { useState, useRef } from "react";
 import Image from "next/image";
+import JSZip from "jszip";
 
 type ResizedImage = {
   dataUrl: string;
@@ -14,6 +15,7 @@ const App = () => {
   const [resizedImages, setResizedImages] = useState<ResizedImage[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -135,6 +137,49 @@ const App = () => {
     document.body.removeChild(link);
   };
 
+  const handleDownloadAll = async () => {
+    if (resizedImages.length === 0) {
+      setMessage("No images to download.");
+      return;
+    }
+
+    setDownloadingAll(true); // Show downloading indicator for this button
+    setMessage("Preparing zip file...");
+
+    try {
+      // Create a new JSZip instance
+      const zip = new JSZip();
+
+      // Loop through each resized image
+      for (const image of resizedImages) {
+        // Fetch the image data as a Blob
+        const response = await fetch(image.dataUrl);
+        const blob = await response.blob();
+        // Add the image to the zip file
+        zip.file(image.name, blob);
+      }
+
+      // Generate the zip file
+      const content = await zip.generateAsync({ type: "blob" });
+
+      // Create a download link for the zip file
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(content);
+      link.download = "resized_images.zip"; // Default zip file name
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href); // Clean up the object URL
+
+      setMessage("All images downloaded as a zip file!");
+    } catch (error) {
+      console.error("Error zipping and downloading images:", error);
+      setMessage("Failed to create zip file. Please try again.");
+    } finally {
+      setDownloadingAll(false); // Hide downloading indicator
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center p-4 font-sans">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-2xl transform transition-all duration-300 hover:scale-[1.01]">
@@ -238,6 +283,21 @@ const App = () => {
             <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
               Resized Images
             </h2>
+            {/* Download All Button */}
+            <div className="mb-6 text-center">
+              <button
+                onClick={handleDownloadAll}
+                disabled={downloadingAll || resizedImages.length === 0}
+                className={`py-3 px-8 rounded-xl text-white font-bold text-lg shadow-md transition duration-300 ease-in-out
+                  ${
+                    downloadingAll
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-purple-600 hover:bg-purple-700 hover:shadow-lg active:bg-purple-800"
+                  }`}
+              >
+                {downloadingAll ? "Zipping..." : "Download All as ZIP"}
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {resizedImages.map((image, index) => (
                 <div
