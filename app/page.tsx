@@ -10,14 +10,35 @@ type ResizedImage = {
 
 const App = () => {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [minSize, setMinSize] = useState<number>(0);
-  const [maxSize, setMaxSize] = useState<number>(0);
+  const [minSize, setMinSize] = useState<number>(0); // For dimension resizing (pixels)
+  const [maxSize, setMaxSize] = useState<number>(0); // For dimension resizing (pixels)
+  const [minFileSize, setMinFileSize] = useState<number>(0); // For file size resizing (KB)
+  const [maxFileSize, setMaxSizeFile] = useState<number>(0); // For file size resizing (KB)
+  const [resizeMode, setResizeMode] = useState<"dimensions" | "fileSize">(
+    "dimensions"
+  ); // 'dimensions' or 'fileSize'
+
   const [resizedImages, setResizedImages] = useState<ResizedImage[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
   const [downloadingAll, setDownloadingAll] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Helper function to convert Data URL to Blob for size calculation
+  const dataURLtoBlob = (dataurl: string) => {
+    const arr = dataurl.split(",");
+    // Extract MIME type from the data URL
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : "image/png"; // Default to png if mime not found
+    const bstr = atob(arr[1]); // Decode base64 string
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n); // Fill Uint8Array with character codes
+    }
+    return new Blob([u8arr], { type: mime }); // Create Blob
+  };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files;
@@ -28,15 +49,27 @@ const App = () => {
   };
 
   const handleConvert = async () => {
+    // Validate inputs based on selected resize mode
     if (selectedFiles.length === 0) {
       setMessage("Please select at least one image.");
       return;
     }
-    if (minSize <= 0 || maxSize <= 0 || minSize > maxSize) {
-      setMessage(
-        "Please enter valid min and max dimensions (min > 0, max > 0, min <= max)."
-      );
-      return;
+
+    if (resizeMode === "dimensions") {
+      if (minSize <= 0 || maxSize <= 0 || minSize > maxSize) {
+        setMessage(
+          "Please enter valid min and max dimensions (min > 0, max > 0, min <= max)."
+        );
+        return;
+      }
+    } else {
+      // resizeMode === 'fileSize'
+      if (minFileSize <= 0 || maxFileSize <= 0 || minFileSize > maxFileSize) {
+        setMessage(
+          "Please enter valid min and max file sizes (min > 0, max > 0, min <= max)."
+        );
+        return;
+      }
     }
 
     setLoading(true);
@@ -79,43 +112,164 @@ const App = () => {
           continue;
         }
 
-        let newWidth = img.width;
-        let newHeight = img.height;
+        let resizedDataUrl = "";
+        let outputFileName = "";
 
-        // Resize based on max
-        if (newWidth > maxSize || newHeight > maxSize) {
-          if (newWidth > newHeight) {
-            newHeight = (newHeight / newWidth) * maxSize;
-            newWidth = maxSize;
-          } else {
-            newWidth = (newWidth / newHeight) * maxSize;
-            newHeight = maxSize;
+        if (resizeMode === "dimensions") {
+          // --- Dimension-based resizing logic ---
+          let newWidth = img.width;
+          let newHeight = img.height;
+
+          // Resize based on max dimension
+          if (newWidth > maxSize || newHeight > maxSize) {
+            if (newWidth > newHeight) {
+              newHeight = (newHeight / newWidth) * maxSize;
+              newWidth = maxSize;
+            } else {
+              newWidth = (newWidth / newHeight) * maxSize;
+              newHeight = maxSize;
+            }
           }
-        }
 
-        // Resize based on min
-        if (newWidth < minSize || newHeight < minSize) {
-          if (newWidth < newHeight) {
-            newWidth = (newWidth / newHeight) * minSize;
-            newHeight = minSize;
-          } else {
-            newHeight = (newHeight / newWidth) * minSize;
-            newWidth = minSize;
+          // Resize based on min dimension
+          if (newWidth < minSize || newHeight < minSize) {
+            if (newWidth < newHeight) {
+              newWidth = (newWidth / newHeight) * minSize;
+              newHeight = minSize;
+            } else {
+              newHeight = (newHeight / newWidth) * minSize;
+              newWidth = minSize;
+            }
           }
+
+          newWidth = Math.round(newWidth);
+          newHeight = Math.round(newHeight);
+
+          canvas.width = newWidth;
+          canvas.height = newHeight;
+          ctx.drawImage(img, 0, 0, newWidth, newHeight);
+          resizedDataUrl = canvas.toDataURL("image/png"); // Keep original format if possible
+          outputFileName = `resized_dim_${file.name}`;
+        } else {
+          // --- File Size-based resizing logic ---
+          let currentQuality = 0.9; // Start with high quality for JPEG
+          let currentWidth = img.width;
+          let currentHeight = img.height;
+          let currentFileSizeKB = 0;
+          const maxIterations = 100; // Limit iterations to prevent infinite loops
+          let iterations = 0;
+          let lastValidDataUrl = ""; // Stores the last data URL that was within range or closest
+          let lastValidFileSizeKB = 0;
+
+          // Function to update canvas, draw image, and get size
+          const updateCanvasAndGetSize = (
+            width: number,
+            height: number,
+            quality: number
+          ): { dataUrl: string; sizeKB: number } => {
+            canvas.width = width;
+            canvas.height = height;
+            ctx.clearRect(0, 0, width, height); // Clear canvas before drawing
+            ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL("image/jpeg", quality); // Always output as JPEG for size control
+            const sizeKB = dataURLtoBlob(dataUrl).size / 1024;
+            return { dataUrl, sizeKB };
+          };
+
+          // Initial check with current dimensions and quality
+          const { dataUrl: initialDataUrl, sizeKB: initialSizeKB } =
+            updateCanvasAndGetSize(currentWidth, currentHeight, currentQuality);
+          currentFileSizeKB = initialSizeKB;
+          resizedDataUrl = initialDataUrl;
+
+          // If the image is already within the desired range or smaller than min, we are done.
+          if (
+            currentFileSizeKB >= minFileSize &&
+            currentFileSizeKB <= maxFileSize
+          ) {
+            lastValidDataUrl = resizedDataUrl;
+            lastValidFileSizeKB = currentFileSizeKB;
+          } else if (currentFileSizeKB < minFileSize) {
+            // Image is already smaller than the minimum desired size.
+            // We accept it as is, as upsizing by adding data is generally not desirable.
+            lastValidDataUrl = resizedDataUrl;
+            lastValidFileSizeKB = currentFileSizeKB;
+            setMessage(
+              `Image ${
+                file.name
+              } is already smaller than ${minFileSize}KB (${currentFileSizeKB.toFixed(
+                2
+              )}KB). Keeping original.`
+            );
+          } else {
+            // Image is too large, start iterative reduction
+            while (
+              currentFileSizeKB > maxFileSize &&
+              iterations < maxIterations
+            ) {
+              iterations++;
+
+              // Prioritize quality reduction first
+              if (currentQuality > 0.1) {
+                currentQuality = Math.max(0.1, currentQuality - 0.05); // Reduce quality by 5%
+              } else {
+                // If quality is at its minimum, reduce dimensions
+                const scaleFactor = 0.9; // Reduce dimensions by 10%
+                currentWidth *= scaleFactor;
+                currentHeight *= scaleFactor;
+                currentWidth = Math.round(currentWidth);
+                currentHeight = Math.round(currentHeight);
+
+                // Ensure dimensions don't go below 1x1
+                if (currentWidth < 1) currentWidth = 1;
+                if (currentHeight < 1) currentHeight = 1;
+              }
+
+              const { dataUrl: newDataUrl, sizeKB: newSizeKB } =
+                updateCanvasAndGetSize(
+                  currentWidth,
+                  currentHeight,
+                  currentQuality
+                );
+              currentFileSizeKB = newSizeKB;
+              resizedDataUrl = newDataUrl;
+
+              // If we crossed the max threshold and are now within or below it, store this as potentially optimal
+              if (currentFileSizeKB <= maxFileSize) {
+                lastValidDataUrl = resizedDataUrl;
+                lastValidFileSizeKB = currentFileSizeKB;
+                if (currentFileSizeKB >= minFileSize) {
+                  // We found a size within the target range, break the loop
+                  break;
+                }
+              }
+            }
+
+            // After the loop, use the last valid data URL if found, otherwise use the last generated one.
+            if (lastValidDataUrl) {
+              resizedDataUrl = lastValidDataUrl;
+              currentFileSizeKB = lastValidFileSizeKB;
+            } else {
+              // Fallback: if no valid size was found within iterations, use the last generated one
+              setMessage(
+                `Could not perfectly resize ${
+                  file.name
+                } to target file size. Closest size: ${currentFileSizeKB.toFixed(
+                  2
+                )}KB`
+              );
+            }
+          }
+          // Ensure the output file name has a .jpeg extension
+          outputFileName = `resized_filesize_${file.name
+            .split(".")
+            .slice(0, -1)
+            .join(".")}.jpeg`;
         }
-
-        newWidth = Math.round(newWidth);
-        newHeight = Math.round(newHeight);
-
-        canvas.width = newWidth;
-        canvas.height = newHeight;
-
-        ctx.drawImage(img, 0, 0, newWidth, newHeight);
-        const resizedDataUrl = canvas.toDataURL("image/png");
 
         newResizedImages.push({
           dataUrl: resizedDataUrl,
-          name: `resized_${file.name}`,
+          name: outputFileName,
         });
       } catch (error) {
         console.error(`Error processing ${file.name}:`, error);
@@ -143,33 +297,27 @@ const App = () => {
       return;
     }
 
-    setDownloadingAll(true); // Show downloading indicator for this button
+    setDownloadingAll(true); // Show downloading indicator
     setMessage("Preparing zip file...");
 
     try {
-      // Create a new JSZip instance
       const zip = new JSZip();
 
-      // Loop through each resized image
       for (const image of resizedImages) {
-        // Fetch the image data as a Blob
         const response = await fetch(image.dataUrl);
         const blob = await response.blob();
-        // Add the image to the zip file
         zip.file(image.name, blob);
       }
 
-      // Generate the zip file
       const content = await zip.generateAsync({ type: "blob" });
 
-      // Create a download link for the zip file
       const link = document.createElement("a");
       link.href = URL.createObjectURL(content);
-      link.download = "resized_images.zip"; // Default zip file name
+      link.download = "resized_images.zip";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(link.href); // Clean up the object URL
+      URL.revokeObjectURL(link.href);
 
       setMessage("All images downloaded as a zip file!");
     } catch (error) {
@@ -186,6 +334,36 @@ const App = () => {
         <h1 className="text-4xl font-extrabold text-center text-gray-800 mb-8 tracking-tight">
           Image Resizer
         </h1>
+
+        {/* Resize Mode Selection */}
+        <div className="mb-6 flex justify-center space-x-6">
+          <label className="inline-flex items-center cursor-pointer">
+            <input
+              type="radio"
+              className="form-radio h-5 w-5 text-blue-600"
+              name="resizeMode"
+              value="dimensions"
+              checked={resizeMode === "dimensions"}
+              onChange={() => setResizeMode("dimensions")}
+            />
+            <span className="ml-2 text-lg font-semibold text-gray-700">
+              Resize by Dimensions (px)
+            </span>
+          </label>
+          <label className="inline-flex items-center cursor-pointer">
+            <input
+              type="radio"
+              className="form-radio h-5 w-5 text-blue-600"
+              name="resizeMode"
+              value="fileSize"
+              checked={resizeMode === "fileSize"}
+              onChange={() => setResizeMode("fileSize")}
+            />
+            <span className="ml-2 text-lg font-semibold text-gray-700">
+              Resize by File Size (KB)
+            </span>
+          </label>
+        </div>
 
         <div className="mb-6">
           <label
@@ -214,49 +392,92 @@ const App = () => {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <div>
-            <label
-              htmlFor="min-size"
-              className="block text-lg font-semibold text-gray-700 mb-2"
-            >
-              Min Dimension (px):
-            </label>
-            <input
-              id="min-size"
-              type="number"
-              value={minSize}
-              onChange={(e) => setMinSize(Number(e.target.value))}
-              placeholder="e.g., 100"
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
-            />
+        {/* Conditional Input Fields based on Resize Mode */}
+        {resizeMode === "dimensions" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div>
+              <label
+                htmlFor="min-size"
+                className="block text-lg font-semibold text-gray-700 mb-2"
+              >
+                Min Dimension (px):
+              </label>
+              <input
+                id="min-size"
+                type="number"
+                value={minSize}
+                onChange={(e) => setMinSize(Number(e.target.value))}
+                placeholder="e.g., 100"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="max-size"
+                className="block text-lg font-semibold text-gray-700 mb-2"
+              >
+                Max Dimension (px):
+              </label>
+              <input
+                id="max-size"
+                type="number"
+                value={maxSize}
+                onChange={(e) => setMaxSize(Number(e.target.value))}
+                placeholder="e.g., 800"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
+              />
+            </div>
           </div>
-          <div>
-            <label
-              htmlFor="max-size"
-              className="block text-lg font-semibold text-gray-700 mb-2"
-            >
-              Max Dimension (px):
-            </label>
-            <input
-              id="max-size"
-              type="number"
-              value={maxSize}
-              onChange={(e) => setMaxSize(Number(e.target.value))}
-              placeholder="e.g., 800"
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
-            />
+        )}
+
+        {resizeMode === "fileSize" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div>
+              <label
+                htmlFor="min-file-size"
+                className="block text-lg font-semibold text-gray-700 mb-2"
+              >
+                Min File Size (KB):
+              </label>
+              <input
+                id="min-file-size"
+                type="number"
+                value={minFileSize}
+                onChange={(e) => setMinFileSize(Number(e.target.value))}
+                placeholder="e.g., 25"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="max-file-size"
+                className="block text-lg font-semibold text-gray-700 mb-2"
+              >
+                Max File Size (KB):
+              </label>
+              <input
+                id="max-file-size"
+                type="number"
+                value={maxFileSize}
+                onChange={(e) => setMaxSizeFile(Number(e.target.value))}
+                placeholder="e.g., 50"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200"
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         <button
           onClick={handleConvert}
           disabled={
             loading ||
             selectedFiles.length === 0 ||
-            minSize <= 0 ||
-            maxSize <= 0 ||
-            minSize > maxSize
+            (resizeMode === "dimensions" &&
+              (minSize <= 0 || maxSize <= 0 || minSize > maxSize)) ||
+            (resizeMode === "fileSize" &&
+              (minFileSize <= 0 ||
+                maxFileSize <= 0 ||
+                minFileSize > maxFileSize))
           }
           className={`w-full py-3 px-6 rounded-xl text-white font-bold text-lg shadow-md transition duration-300 ease-in-out
             ${
@@ -271,7 +492,9 @@ const App = () => {
         {message && (
           <p
             className={`mt-6 text-center text-lg ${
-              message.includes("Failed") ? "text-red-600" : "text-green-600"
+              message.includes("Failed") || message.includes("Could not")
+                ? "text-red-600"
+                : "text-green-600"
             }`}
           >
             {message}
@@ -326,6 +549,7 @@ const App = () => {
             </div>
           </div>
         )}
+        {/* Hidden canvas for image processing */}
         <canvas ref={canvasRef} className="hidden" />
       </div>
     </div>
